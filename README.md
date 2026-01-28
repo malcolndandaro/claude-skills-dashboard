@@ -15,7 +15,7 @@ A beautiful TUI (Terminal User Interface) dashboard for monitoring and analyzing
 
 ## Screenshots
 
-![Claude Skills Dashboard](dashboard.gif)
+![Claude Skills Dashboard](gif2_dashboard.gif)
 
 ## Requirements
 
