@@ -45,12 +45,6 @@ A beautiful TUI (Terminal User Interface) dashboard for monitoring and analyzing
 
 ## Installation
 
-### From PyPI (Coming Soon)
-
-```bash
-pip install claude-skills-dashboard
-```
-
 ### From Source
 
 ```bash
