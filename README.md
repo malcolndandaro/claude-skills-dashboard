@@ -15,28 +15,7 @@ A beautiful TUI (Terminal User Interface) dashboard for monitoring and analyzing
 
 ## Screenshots
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        Claude Skills Dashboard                              │
-├───────────────────┬───────────────────┬─────────────────────────────────────┤
-│ Live Feed         │ Sessions          │ Statistics                          │
-│                   │                   │                                     │
-│ 14:32:05 asset-.. │ ● my-project      │ Total: 245                          │
-│ 14:31:42 databr.. │ ○ other-proj      │ Skills: 12                          │
-│ 14:30:18 commit   │                   │ Sessions: 8                         │
-│                   │                   │                                     │
-│                   │                   │ Top Skills:                         │
-│                   │                   │  databricks-expert: 45              │
-│                   │                   │  commit: 32                         │
-├───────────────────┴───────────────────┴─────────────────────────────────────┤
-│ History  [f]ilter [r]eset                                                   │
-│                                                                             │
-│ Time     │ Skill              │ Session  │ Working Directory                │
-│ 14:32:05 │ asset-bundles      │ 3aa3643b │ /path/to/project                 │
-│ 14:31:42 │ databricks-expert  │ 3aa3643b │ /path/to/project                 │
-│ 14:30:18 │ commit             │ 7bc2841a │ /another/project                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+![Claude Skills Dashboard](dashboard.gif)
 
 ## Requirements
 
