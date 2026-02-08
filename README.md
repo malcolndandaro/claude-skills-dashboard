@@ -24,10 +24,24 @@ A beautiful TUI (Terminal User Interface) dashboard for monitoring and analyzing
 
 ## Installation
 
+### Quick Install (recommended)
+
+Install everything — the tracking hook and the dashboard — with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/malcolndandaro/claude-skills-dashboard/main/setup.sh | bash
+```
+
+This will:
+
+1. Verify prerequisites (Python 3.10+, pip, jq)
+2. Install the skill tracking hook into `~/.claude/settings.json`
+3. Install the `claude-skills-dashboard` package from GitHub
+
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/claude-skills-dashboard.git
+git clone https://github.com/malcolndandaro/claude-skills-dashboard.git
 cd claude-skills-dashboard
 pip install -e .
 ```
@@ -36,10 +50,9 @@ pip install -e .
 
 ### Enable Skill Tracking Hook
 
-The dashboard reads from `~/.claude/skill-tracking.jsonl`, which is populated by a Claude Code hook. Run the install script to set up the hook automatically:
+If you used the quick install above, the hook is already configured. Otherwise, run the install script to set up the hook:
 
 ```bash
-# Make the script executable and run it
 chmod +x install-hook.sh
 ./install-hook.sh
 ```
