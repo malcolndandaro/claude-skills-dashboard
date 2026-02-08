@@ -4,16 +4,24 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Optional
 
-from .models import SkillInvocation, SkillStats
+from .models import AgentInvocation, SkillInvocation, SkillStats
 
 
-def compute_stats(invocations: list[SkillInvocation]) -> SkillStats:
-    """Compute aggregate statistics from a list of invocations."""
-    if not invocations:
+def compute_stats(
+    invocations: list[SkillInvocation],
+    agents: list[AgentInvocation] | None = None,
+) -> SkillStats:
+    """Compute aggregate statistics from skill and agent invocations."""
+    agents = agents or []
+
+    if not invocations and not agents:
         return SkillStats()
 
     skill_counts = Counter(inv.skill for inv in invocations)
-    session_counts = Counter(inv.session for inv in invocations)
+    # Merge sessions from both skills and agents
+    all_sessions = [inv.session for inv in invocations] + [a.session for a in agents]
+    session_counts = Counter(all_sessions)
+    agent_counts = Counter(a.subagent_type for a in agents)
 
     return SkillStats(
         total_invocations=len(invocations),
@@ -21,6 +29,8 @@ def compute_stats(invocations: list[SkillInvocation]) -> SkillStats:
         unique_sessions=len(session_counts),
         skill_counts=dict(skill_counts),
         session_counts=dict(session_counts),
+        total_agent_invocations=len(agents),
+        agent_counts=dict(agent_counts),
     )
 
 

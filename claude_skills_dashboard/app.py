@@ -10,10 +10,10 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, Static
 
-from .models import Session, SkillInvocation
-from .reader import DEFAULT_TRACKING_FILE, SessionReader, SkillReader
+from .models import AgentInvocation, Session, SkillInvocation
+from .reader import SessionReader, SessionToolScanner
 from .stats import compute_stats
-from .watcher import SessionWatcher, SkillWatcher
+from .watcher import SessionWatcher
 from .widgets import HistoryTable, LiveFeed, SessionsPanel, StatsPanel
 
 
@@ -74,10 +74,10 @@ class FilterDialog(ModalScreen[tuple[str, str] | None]):
     def compose(self) -> ComposeResult:
         with Container():
             yield Label("Filter Invocations", classes="dialog-title")
-            yield Label("Skill (partial match):")
+            yield Label("Skill / Agent (partial match):")
             yield Input(
                 value=self._skill_filter,
-                placeholder="e.g., databricks",
+                placeholder="e.g., databricks or Explore",
                 id="skill-input",
             )
             yield Label("Session ID (prefix):")
@@ -168,14 +168,13 @@ class SkillsDashboardApp(App):
         Binding("shift+tab", "focus_previous", "Previous Panel"),
     ]
 
-    def __init__(self, file_path: Optional[Path] = None):
+    def __init__(self):
         super().__init__()
-        self.file_path = file_path or DEFAULT_TRACKING_FILE
-        self.reader = SkillReader(self.file_path)
         self.session_reader = SessionReader()
-        self.watcher: Optional[SkillWatcher] = None
+        self.tool_scanner = SessionToolScanner()
         self.session_watcher: Optional[SessionWatcher] = None
         self._invocations: list[SkillInvocation] = []
+        self._agent_invocations: list[AgentInvocation] = []
         self._sessions: list[Session] = []
 
     def compose(self) -> ComposeResult:
@@ -198,33 +197,32 @@ class SkillsDashboardApp(App):
     def on_mount(self) -> None:
         """Initialize the app on mount."""
         self._load_initial_data()
-        self._start_watcher()
         self._start_session_watcher()
 
     def _load_initial_data(self) -> None:
-        """Load initial data from the tracking file."""
-        self._invocations = self.reader.read_all()
+        """Load initial data from session JSONL files."""
+        # Scan session files for skills and agents
+        scanned = self.tool_scanner.scan_all(incremental=False)
+        for inv in scanned:
+            if isinstance(inv, AgentInvocation):
+                self._agent_invocations.append(inv)
+            else:
+                self._invocations.append(inv)
 
         # Update stats
-        stats = compute_stats(self._invocations)
+        stats = compute_stats(self._invocations, self._agent_invocations)
         self.query_one("#stats-panel", StatsPanel).update_stats(stats)
 
-        # Load history table
-        self.query_one("#history-table", HistoryTable).load_invocations(self._invocations)
+        # Load history table with both types
+        self.query_one("#history-table", HistoryTable).load_invocations(
+            self._invocations, self._agent_invocations
+        )
 
         # Load sessions
         self._refresh_sessions()
 
-    def _start_watcher(self) -> None:
-        """Start the file watcher for live updates."""
-        self.watcher = SkillWatcher(
-            file_path=self.file_path,
-            callback=self._on_new_invocation,
-        )
-        self.watcher.start()
-
     def _start_session_watcher(self) -> None:
-        """Start the session watcher for live session updates."""
+        """Start the session watcher for live updates."""
         self.session_watcher = SessionWatcher(
             callback=self._on_session_change,
             debounce_seconds=1.0,
@@ -233,31 +231,53 @@ class SkillsDashboardApp(App):
 
     def _on_session_change(self) -> None:
         """Handle session changes from the watcher."""
-        self.call_from_thread(self._refresh_sessions)
+        self.call_from_thread(self._handle_session_change)
 
-    def _on_new_invocation(self, invocation: SkillInvocation) -> None:
-        """Handle a new invocation from the watcher."""
-        # Use call_from_thread to safely update UI from watcher thread
-        self.call_from_thread(self._handle_new_invocation, invocation)
+    def _handle_session_change(self) -> None:
+        """Process session file changes in the main thread."""
+        # Incrementally scan for new tool invocations
+        new_scanned = self.tool_scanner.scan_all(incremental=True)
 
-    def _handle_new_invocation(self, invocation: SkillInvocation) -> None:
-        """Handle a new invocation in the main thread."""
-        self._invocations.append(invocation)
+        new_skills: list[SkillInvocation] = []
+        new_agents: list[AgentInvocation] = []
+        for inv in new_scanned:
+            if isinstance(inv, AgentInvocation):
+                new_agents.append(inv)
+            else:
+                new_skills.append(inv)
 
-        # Update live feed
-        self.query_one("#live-feed", LiveFeed).add_invocation(invocation)
+        feed = self.query_one("#live-feed", LiveFeed)
+        history = self.query_one("#history-table", HistoryTable)
 
-        # Update history table
-        self.query_one("#history-table", HistoryTable).add_invocation(invocation)
+        # Push new skills to widgets
+        if new_skills:
+            self._invocations.extend(new_skills)
+            for skill in new_skills:
+                feed.add_invocation(skill)
+                history.add_invocation(skill)
 
-        # Update stats
-        stats = compute_stats(self._invocations)
-        self.query_one("#stats-panel", StatsPanel).update_stats(stats)
+        # Push new agents to widgets
+        if new_agents:
+            self._agent_invocations.extend(new_agents)
+            for agent in new_agents:
+                feed.add_agent_invocation(agent)
+                history.add_agent_invocation(agent)
+
+        # Recompute stats if anything changed
+        if new_skills or new_agents:
+            stats = compute_stats(self._invocations, self._agent_invocations)
+            self.query_one("#stats-panel", StatsPanel).update_stats(stats)
+
+        # Refresh sessions panel
+        self._refresh_sessions()
 
     def action_open_filter(self) -> None:
         """Open the filter dialog."""
         history = self.query_one("#history-table", HistoryTable)
-        skill, session = history.current_filter
+        skill, sessions = history.current_filter
+
+        # Show the first session ID in the dialog for manual editing
+        session_str = sessions[0] if sessions and len(sessions) == 1 else ""
 
         def on_dismiss(result: tuple[str, str] | None) -> None:
             if result is not None:
@@ -269,7 +289,7 @@ class SkillsDashboardApp(App):
                 self._update_filter_status(skill_filter, session_filter)
 
         self.push_screen(
-            FilterDialog(skill or "", session or ""),
+            FilterDialog(skill or "", session_str),
             on_dismiss,
         )
 
@@ -302,16 +322,18 @@ class SkillsDashboardApp(App):
 
     @on(SessionsPanel.SessionSelected)
     def on_session_selected(self, event: SessionsPanel.SessionSelected) -> None:
-        """Handle session selection - filter history by selected session."""
+        """Handle session selection - filter history by session group."""
         session = event.session
         history = self.query_one("#history-table", HistoryTable)
-        history.set_filter(session=session.session_id)
-        self._update_filter_status("", session.short_id)
+        # Filter by parent + all child (subagent) session IDs
+        history.set_filter(session=session.all_session_ids)
+        label = session.short_id
+        if session.children:
+            label += f" (+{len(session.children)} subs)"
+        self._update_filter_status("", label)
 
     def on_unmount(self) -> None:
         """Clean up on unmount."""
-        if self.watcher:
-            self.watcher.stop()
         if self.session_watcher:
             self.session_watcher.stop()
 

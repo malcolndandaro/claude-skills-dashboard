@@ -7,10 +7,12 @@ A beautiful TUI (Terminal User Interface) dashboard for monitoring and analyzing
 
 ## Features
 
-- **Live Feed**: Watch skill invocations as they happen in real-time
+- **Live Feed**: Watch skill and agent invocations as they happen in real-time
 - **Session Tracking**: Monitor active Claude Code sessions across all projects
-- **Statistics Panel**: View aggregated usage statistics and top skills
-- **History Table**: Browse and filter all historical skill invocations
+- **Agent Tracking**: See subagent spawning events (Explore, pipeline-developer, etc.) parsed directly from session transcripts
+- **Sidechain Visibility**: Skills invoked by subagents are marked with `>sub` in the live feed
+- **Statistics Panel**: View aggregated usage stats for both skills and agents (top skills + top agents)
+- **History Table**: Browse and filter unified skill + agent history with Type/Name/Details columns
 - **Keyboard Navigation**: Full keyboard support for efficient navigation
 
 ## Screenshots
@@ -20,48 +22,26 @@ A beautiful TUI (Terminal User Interface) dashboard for monitoring and analyzing
 ## Requirements
 
 - Python 3.10 or higher
-- Claude Code CLI with skill tracking enabled
+- Claude Code CLI
 
 ## Installation
+
+### Quick Install (recommended)
+
+Install with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/malcolndandaro/claude-skills-dashboard/main/setup.sh | bash
+```
+
+No hooks or configuration needed. The dashboard reads directly from Claude Code's session JSONL files.
 
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/claude-skills-dashboard.git
+git clone https://github.com/malcolndandaro/claude-skills-dashboard.git
 cd claude-skills-dashboard
 pip install -e .
-```
-
-## Setup
-
-### Enable Skill Tracking Hook
-
-The dashboard reads from `~/.claude/skill-tracking.jsonl`, which is populated by a Claude Code hook. Run the install script to set up the hook automatically:
-
-```bash
-# Make the script executable and run it
-chmod +x install-hook.sh
-./install-hook.sh
-```
-
-Or manually add the hook to your `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "Skill": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo '{\"timestamp\":\"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\",\"session\":\"'$CLAUDE_SESSION_ID'\",\"skill\":\"'$CLAUDE_SKILL'\",\"args\":'${CLAUDE_SKILL_ARGS:-null}',\"cwd\":\"'$PWD'\"}' >> ~/.claude/skill-tracking.jsonl"
-          }
-        ]
-      }
-    ]
-  }
-}
 ```
 
 ## Usage
@@ -85,17 +65,19 @@ claude-skills-dashboard
 
 ## Data Sources
 
-The dashboard reads from two data sources:
+The dashboard reads from two data sources — no hooks required:
 
-1. **Skill Tracking** (`~/.claude/skill-tracking.jsonl`):
-   ```json
-   {"timestamp":"2026-01-23T14:12:19Z","session":"3aa3643b-...","skill":"asset-bundles","args":null,"cwd":"/path/to/project"}
-   ```
+1. **Session JSONL Transcripts** (`~/.claude/projects/*/*.jsonl`):
+   - Parses assistant messages for `Skill` and `Task` tool_use blocks
+   - Discovers skills invoked by subagents (`projects/*/subagents/agent-*.jsonl`)
+   - Tracks agent spawning events (Task tool with subagent type, description)
+   - Incremental scanning via byte position tracking (efficient, no re-scanning)
 
 2. **Session Metadata** (`~/.claude/projects/*/sessions-index.json`):
    - Scans all project directories for session information
    - Detects active sessions (modified within last 5 minutes)
    - Shows project name, summary, message count, and timestamps
+   - Groups sidechain (subagent) sessions under their parent
 
 ## Architecture
 
@@ -104,7 +86,7 @@ claude_skills_dashboard/
 ├── __init__.py          # Package initialization
 ├── app.py               # Main Textual application
 ├── models.py            # Pydantic data models
-├── reader.py            # JSONL parsing and session reading
+├── reader.py            # Session JSONL parsing and tool scanning
 ├── stats.py             # Statistics computation
 ├── watcher.py           # File system monitoring (watchdog)
 └── widgets/
