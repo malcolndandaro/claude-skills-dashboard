@@ -203,7 +203,7 @@ class SkillsDashboardApp(App):
 
     def _load_initial_data(self) -> None:
         """Load initial data from the tracking file."""
-        self._invocations = self.reader.read_all()
+        self._invocations = self.reader.read_all_sources()
 
         # Update stats
         stats = compute_stats(self._invocations)

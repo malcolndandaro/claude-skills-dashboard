@@ -9,8 +9,40 @@ from dateutil.parser import parse as parse_datetime
 
 from .models import Session, SkillInvocation
 
-DEFAULT_TRACKING_FILE = Path.home() / ".claude" / "skill-tracking.jsonl"
+TRACKING_FILENAME = "skill-tracking.jsonl"
+DEFAULT_TRACKING_FILE = Path.home() / ".claude" / TRACKING_FILENAME
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+
+def discover_tracking_files(projects_dir: Optional[Path] = None) -> list[Path]:
+    """Find all project-level skill-tracking.jsonl files.
+
+    Scans ~/.claude/projects/ for original project paths, then checks each
+    for a .claude/skill-tracking.jsonl file.
+    """
+    projects_dir = projects_dir or DEFAULT_PROJECTS_DIR
+    paths: list[Path] = []
+    if not projects_dir.exists():
+        return paths
+
+    for project_dir in projects_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        index_file = project_dir / "sessions-index.json"
+        if not index_file.exists():
+            continue
+        try:
+            with open(index_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            original_path = data.get("originalPath")
+            if original_path:
+                tracking = Path(original_path) / ".claude" / TRACKING_FILENAME
+                if tracking.exists() and tracking not in paths:
+                    paths.append(tracking)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return paths
 
 
 class SkillReader:
@@ -30,17 +62,34 @@ class SkillReader:
         except (json.JSONDecodeError, ValueError):
             return None
 
-    def read_all(self) -> list[SkillInvocation]:
-        """Read all invocations from the tracking file."""
-        if not self.file_path.exists():
+    def _read_file(self, path: Path) -> list[SkillInvocation]:
+        """Read all invocations from a single tracking file."""
+        if not path.exists():
             return []
-
         invocations = []
-        with open(self.file_path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 invocation = self._parse_line(line)
                 if invocation:
                     invocations.append(invocation)
+        return invocations
+
+    def read_all(self) -> list[SkillInvocation]:
+        """Read all invocations from the tracking file."""
+        return self._read_file(self.file_path)
+
+    def read_all_sources(self) -> list[SkillInvocation]:
+        """Read invocations from the primary file and all project-level files.
+
+        Merges user-level and project-level tracking, sorted by timestamp.
+        """
+        invocations = self.read_all()
+
+        for path in discover_tracking_files():
+            if path.resolve() != self.file_path.resolve():
+                invocations.extend(self._read_file(path))
+
+        invocations.sort(key=lambda inv: inv.timestamp)
         return invocations
 
     def read_since(self, since: datetime) -> list[SkillInvocation]:

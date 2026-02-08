@@ -32,11 +32,14 @@ Install everything — the tracking hook and the dashboard — with a single com
 curl -fsSL https://raw.githubusercontent.com/malcolndandaro/claude-skills-dashboard/main/setup.sh | bash
 ```
 
-This will:
+The installer will prompt you to choose:
 
-1. Verify prerequisites (Python 3.10+, pip, jq)
-2. Install the skill tracking hook into `~/.claude/settings.json`
-3. Install the `claude-skills-dashboard` package from GitHub
+| Scope | Settings file | Tracking log | Use case |
+|-------|--------------|--------------|----------|
+| **User level** | `~/.claude/settings.json` | `~/.claude/skill-tracking.jsonl` | Track skills across all projects |
+| **Project level** | `.claude/settings.json` | `.claude/skill-tracking.jsonl` | Track skills for one project only |
+
+It will then verify prerequisites (Python 3.10+, pip, jq), install the hook, and install the dashboard.
 
 ### From Source
 
