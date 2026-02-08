@@ -32,7 +32,7 @@ class HistoryTable(DataTable):
         )
         self._invocations: list[SkillInvocation] = []
         self._filter_skill: Optional[str] = None
-        self._filter_session: Optional[str] = None
+        self._filter_sessions: Optional[list[str]] = None
 
     def on_mount(self) -> None:
         """Set up table columns when mounted."""
@@ -55,8 +55,8 @@ class HistoryTable(DataTable):
         if self._filter_skill:
             if self._filter_skill.lower() not in invocation.skill.lower():
                 return False
-        if self._filter_session:
-            if not invocation.session.startswith(self._filter_session):
+        if self._filter_sessions:
+            if not any(invocation.session.startswith(sid) for sid in self._filter_sessions):
                 return False
         return True
 
@@ -81,20 +81,29 @@ class HistoryTable(DataTable):
     def set_filter(
         self,
         skill: Optional[str] = None,
-        session: Optional[str] = None,
+        session: Optional[str | list[str]] = None,
     ) -> None:
-        """Set filter criteria and refresh table."""
+        """Set filter criteria and refresh table.
+
+        ``session`` accepts a single ID string or a list of IDs (e.g. parent
+        + children) for grouped filtering.
+        """
         self._filter_skill = skill
-        self._filter_session = session
+        if session is None:
+            self._filter_sessions = None
+        elif isinstance(session, list):
+            self._filter_sessions = session
+        else:
+            self._filter_sessions = [session]
         self._refresh_table()
 
     def clear_filter(self) -> None:
         """Clear all filters and refresh table."""
         self._filter_skill = None
-        self._filter_session = None
+        self._filter_sessions = None
         self._refresh_table()
 
     @property
-    def current_filter(self) -> tuple[Optional[str], Optional[str]]:
-        """Return current filter values (skill, session)."""
-        return (self._filter_skill, self._filter_session)
+    def current_filter(self) -> tuple[Optional[str], Optional[list[str]]]:
+        """Return current filter values (skill, sessions)."""
+        return (self._filter_skill, self._filter_sessions)

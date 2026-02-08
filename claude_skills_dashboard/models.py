@@ -18,6 +18,7 @@ class Session(BaseModel):
     modified: Optional[datetime] = None
     is_sidechain: bool = False
     file_path: Optional[str] = None
+    children: list["Session"] = Field(default_factory=list)
 
     @property
     def short_id(self) -> str:
@@ -47,12 +48,29 @@ class Session(BaseModel):
             return self.first_prompt[:60] + "..." if len(self.first_prompt) > 60 else self.first_prompt
         return "(no summary)"
 
+    @property
+    def all_session_ids(self) -> list[str]:
+        """Return this session's ID plus all children's IDs."""
+        ids = [self.session_id]
+        for child in self.children:
+            ids.append(child.session_id)
+        return ids
+
+    @property
+    def total_message_count(self) -> int:
+        """Return message count including all children."""
+        return self.message_count + sum(c.message_count for c in self.children)
+
     def is_active(self, threshold_seconds: int = 300) -> bool:
-        """Check if session was modified within threshold (default 5 min)."""
-        if not self.modified:
-            return False
-        delta = datetime.now(self.modified.tzinfo) - self.modified
-        return delta.total_seconds() < threshold_seconds
+        """Check if session or any child was modified within threshold."""
+        if self.modified:
+            delta = datetime.now(self.modified.tzinfo) - self.modified
+            if delta.total_seconds() < threshold_seconds:
+                return True
+        for child in self.children:
+            if child.is_active(threshold_seconds):
+                return True
+        return False
 
 
 class SkillInvocation(BaseModel):

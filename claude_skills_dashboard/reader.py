@@ -230,30 +230,91 @@ class SessionReader:
 
         return list(sessions.values())
 
+    def _dedup_sessions(self, raw: list[Session]) -> list[Session]:
+        """Deduplicate sessions by session_id, keeping most recently modified."""
+        seen: dict[str, Session] = {}
+        for session in raw:
+            existing = seen.get(session.session_id)
+            if existing is None:
+                seen[session.session_id] = session
+            else:
+                existing_mtime = existing.modified or datetime.min.replace(tzinfo=timezone.utc)
+                new_mtime = session.modified or datetime.min.replace(tzinfo=timezone.utc)
+                if new_mtime > existing_mtime:
+                    seen[session.session_id] = session
+        return list(seen.values())
+
+    @staticmethod
+    def _group_sessions(sessions: list[Session]) -> list[Session]:
+        """Group sidechain (subagent) sessions under their parent.
+
+        Matching heuristic: a sidechain belongs to a main session when they
+        share the same project_path and the sidechain was created during the
+        main session's lifetime (between its created and modified timestamps).
+        """
+        main_sessions: list[Session] = []
+        sidechains: list[Session] = []
+
+        for s in sessions:
+            if s.is_sidechain:
+                sidechains.append(s)
+            else:
+                # Reset children in case of re-grouping
+                s.children = []
+                main_sessions.append(s)
+
+        # Sort main sessions by created time so we can match sidechains
+        main_sessions.sort(
+            key=lambda s: s.created or datetime.min.replace(tzinfo=timezone.utc),
+        )
+
+        for sc in sidechains:
+            best_parent: Optional[Session] = None
+            best_distance: Optional[float] = None
+            sc_created = sc.created or datetime.min.replace(tzinfo=timezone.utc)
+
+            for main in main_sessions:
+                if main.project_path != sc.project_path:
+                    continue
+
+                m_created = main.created or datetime.min.replace(tzinfo=timezone.utc)
+                m_modified = main.modified or datetime.min.replace(tzinfo=timezone.utc)
+
+                # Sidechain created within the main session's time window
+                if m_created <= sc_created <= m_modified:
+                    distance = abs((sc_created - m_created).total_seconds())
+                    if best_distance is None or distance < best_distance:
+                        best_parent = main
+                        best_distance = distance
+
+            if best_parent is not None:
+                best_parent.children.append(sc)
+            # If no parent found, the sidechain is treated as a standalone;
+            # show it so it doesn't silently disappear.
+            else:
+                main_sessions.append(sc)
+
+        return main_sessions
+
     def read_all_sessions(self) -> list[Session]:
-        """Read all sessions from all projects."""
+        """Read all sessions from all projects, grouped by parent/child."""
         if not self.projects_dir.exists():
             return []
 
-        seen: dict[str, Session] = {}
+        raw: list[Session] = []
         for project_dir in self.projects_dir.iterdir():
             if project_dir.is_dir():
-                for session in self.read_project_sessions(project_dir):
-                    existing = seen.get(session.session_id)
-                    if existing is None:
-                        seen[session.session_id] = session
-                    else:
-                        # Keep the entry with the most recent modified time
-                        existing_mtime = existing.modified or datetime.min.replace(tzinfo=timezone.utc)
-                        new_mtime = session.modified or datetime.min.replace(tzinfo=timezone.utc)
-                        if new_mtime > existing_mtime:
-                            seen[session.session_id] = session
+                raw.extend(self.read_project_sessions(project_dir))
 
-        sessions = list(seen.values())
+        unique = self._dedup_sessions(raw)
+        grouped = self._group_sessions(unique)
 
         # Sort by modified time (most recent first)
-        sessions.sort(key=lambda s: s.modified or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-        return sessions
+        grouped.sort(
+            key=lambda s: s.modified or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return grouped
 
     def get_active_sessions(self, threshold_seconds: int = 300) -> list[Session]:
         """Get sessions that were modified within the threshold."""
@@ -265,4 +326,7 @@ class SessionReader:
         for session in self.read_all_sessions():
             if session.session_id.startswith(session_id):
                 return session
+            for child in session.children:
+                if child.session_id.startswith(session_id):
+                    return session
         return None

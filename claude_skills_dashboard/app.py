@@ -257,7 +257,10 @@ class SkillsDashboardApp(App):
     def action_open_filter(self) -> None:
         """Open the filter dialog."""
         history = self.query_one("#history-table", HistoryTable)
-        skill, session = history.current_filter
+        skill, sessions = history.current_filter
+
+        # Show the first session ID in the dialog for manual editing
+        session_str = sessions[0] if sessions and len(sessions) == 1 else ""
 
         def on_dismiss(result: tuple[str, str] | None) -> None:
             if result is not None:
@@ -269,7 +272,7 @@ class SkillsDashboardApp(App):
                 self._update_filter_status(skill_filter, session_filter)
 
         self.push_screen(
-            FilterDialog(skill or "", session or ""),
+            FilterDialog(skill or "", session_str),
             on_dismiss,
         )
 
@@ -302,11 +305,15 @@ class SkillsDashboardApp(App):
 
     @on(SessionsPanel.SessionSelected)
     def on_session_selected(self, event: SessionsPanel.SessionSelected) -> None:
-        """Handle session selection - filter history by selected session."""
+        """Handle session selection - filter history by session group."""
         session = event.session
         history = self.query_one("#history-table", HistoryTable)
-        history.set_filter(session=session.session_id)
-        self._update_filter_status("", session.short_id)
+        # Filter by parent + all child (subagent) session IDs
+        history.set_filter(session=session.all_session_ids)
+        label = session.short_id
+        if session.children:
+            label += f" (+{len(session.children)} subs)"
+        self._update_filter_status("", label)
 
     def on_unmount(self) -> None:
         """Clean up on unmount."""

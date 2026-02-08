@@ -33,9 +33,10 @@ class SessionsPanel(DataTable):
     def on_mount(self) -> None:
         """Set up the table columns."""
         self.add_column("Status", key="status", width=6)
-        self.add_column("Project", key="project", width=25)
+        self.add_column("Project", key="project", width=20)
         self.add_column("Summary", key="summary")
         self.add_column("Msgs", key="msgs", width=5)
+        self.add_column("Subs", key="subs", width=5)
         self.add_column("Modified", key="modified", width=12)
 
     def load_sessions(self, sessions: list[Session]) -> None:
@@ -68,11 +69,15 @@ class SessionsPanel(DataTable):
                     local_modified = session.modified.astimezone()
                     modified = local_modified.strftime("%m-%d %H:%M")
 
+            sub_count = len(session.children)
+            subs = Text(str(sub_count), style="bold cyan") if sub_count else Text("-", style="dim")
+
             self.add_row(
                 status,
-                session.project_name[:25],
+                session.project_name[:20],
                 session.display_summary,
-                str(session.message_count),
+                str(session.total_message_count),
+                subs,
                 modified,
                 key=session.session_id,
             )
