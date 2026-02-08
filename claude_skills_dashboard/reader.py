@@ -138,8 +138,7 @@ class SessionReader:
 
     def read_project_sessions(self, project_dir: Path) -> list[Session]:
         """Read sessions from a single project directory."""
-        sessions = []
-        indexed_ids = set()
+        sessions: dict[str, Session] = {}
         project_path = str(project_dir)
 
         # First, read from sessions-index.json
@@ -152,16 +151,15 @@ class SessionReader:
                 project_path = data.get("originalPath", str(project_dir))
                 for entry in data.get("entries", []):
                     session = self._parse_session_entry(entry, project_path)
-                    if session:
-                        sessions.append(session)
-                        indexed_ids.add(session.session_id)
+                    if session and session.session_id not in sessions:
+                        sessions[session.session_id] = session
             except (json.JSONDecodeError, OSError):
                 pass
 
         # Then, scan for unindexed session files (recently created sessions)
         for jsonl_file in project_dir.glob("*.jsonl"):
             session_id = jsonl_file.stem
-            if session_id not in indexed_ids:
+            if session_id not in sessions:
                 # Create a minimal session entry from the file
                 try:
                     mtime = jsonl_file.stat().st_mtime
@@ -177,21 +175,32 @@ class SessionReader:
                         is_sidechain=False,
                         file_path=str(jsonl_file),
                     )
-                    sessions.append(session)
+                    sessions[session_id] = session
                 except OSError:
                     pass
 
-        return sessions
+        return list(sessions.values())
 
     def read_all_sessions(self) -> list[Session]:
         """Read all sessions from all projects."""
         if not self.projects_dir.exists():
             return []
 
-        sessions = []
+        seen: dict[str, Session] = {}
         for project_dir in self.projects_dir.iterdir():
             if project_dir.is_dir():
-                sessions.extend(self.read_project_sessions(project_dir))
+                for session in self.read_project_sessions(project_dir):
+                    existing = seen.get(session.session_id)
+                    if existing is None:
+                        seen[session.session_id] = session
+                    else:
+                        # Keep the entry with the most recent modified time
+                        existing_mtime = existing.modified or datetime.min.replace(tzinfo=timezone.utc)
+                        new_mtime = session.modified or datetime.min.replace(tzinfo=timezone.utc)
+                        if new_mtime > existing_mtime:
+                            seen[session.session_id] = session
+
+        sessions = list(seen.values())
 
         # Sort by modified time (most recent first)
         sessions.sort(key=lambda s: s.modified or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
