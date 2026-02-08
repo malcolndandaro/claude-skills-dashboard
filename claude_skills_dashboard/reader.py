@@ -1,148 +1,15 @@
-"""JSONL file reader for skill tracking data."""
+"""Session JSONL reader for skill and agent tracking data."""
 
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
 from dateutil.parser import parse as parse_datetime
 
-from .models import Session, SkillInvocation
+from .models import AgentInvocation, Session, SkillInvocation
 
-TRACKING_FILENAME = "skill-tracking.jsonl"
-DEFAULT_TRACKING_FILE = Path.home() / ".claude" / TRACKING_FILENAME
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
-
-
-def discover_tracking_files(projects_dir: Optional[Path] = None) -> list[Path]:
-    """Find all project-level skill-tracking.jsonl files.
-
-    Scans ~/.claude/projects/ for original project paths, then checks each
-    for a .claude/skill-tracking.jsonl file.
-    """
-    projects_dir = projects_dir or DEFAULT_PROJECTS_DIR
-    paths: list[Path] = []
-    if not projects_dir.exists():
-        return paths
-
-    for project_dir in projects_dir.iterdir():
-        if not project_dir.is_dir():
-            continue
-        index_file = project_dir / "sessions-index.json"
-        if not index_file.exists():
-            continue
-        try:
-            with open(index_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            original_path = data.get("originalPath")
-            if original_path:
-                tracking = Path(original_path) / ".claude" / TRACKING_FILENAME
-                if tracking.exists() and tracking not in paths:
-                    paths.append(tracking)
-        except (json.JSONDecodeError, OSError):
-            continue
-
-    return paths
-
-
-class SkillReader:
-    """Reader for skill-tracking.jsonl files."""
-
-    def __init__(self, file_path: Optional[Path] = None):
-        self.file_path = file_path or DEFAULT_TRACKING_FILE
-
-    def _parse_line(self, line: str) -> Optional[SkillInvocation]:
-        """Parse a single JSONL line into a SkillInvocation."""
-        line = line.strip()
-        if not line:
-            return None
-        try:
-            data = json.loads(line)
-            return SkillInvocation(**data)
-        except (json.JSONDecodeError, ValueError):
-            return None
-
-    def _read_file(self, path: Path) -> list[SkillInvocation]:
-        """Read all invocations from a single tracking file."""
-        if not path.exists():
-            return []
-        invocations = []
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                invocation = self._parse_line(line)
-                if invocation:
-                    invocations.append(invocation)
-        return invocations
-
-    def read_all(self) -> list[SkillInvocation]:
-        """Read all invocations from the tracking file."""
-        return self._read_file(self.file_path)
-
-    def read_all_sources(self) -> list[SkillInvocation]:
-        """Read invocations from the primary file and all project-level files.
-
-        Merges user-level and project-level tracking, sorted by timestamp.
-        """
-        invocations = self.read_all()
-
-        for path in discover_tracking_files():
-            if path.resolve() != self.file_path.resolve():
-                invocations.extend(self._read_file(path))
-
-        invocations.sort(key=lambda inv: inv.timestamp)
-        return invocations
-
-    def read_since(self, since: datetime) -> list[SkillInvocation]:
-        """Read invocations since a given timestamp."""
-        all_invocations = self.read_all()
-        return [inv for inv in all_invocations if inv.timestamp >= since]
-
-    def filter_by_skill(
-        self, skill_name: str, invocations: Optional[list[SkillInvocation]] = None
-    ) -> list[SkillInvocation]:
-        """Filter invocations by skill name (case-insensitive partial match)."""
-        if invocations is None:
-            invocations = self.read_all()
-        skill_lower = skill_name.lower()
-        return [inv for inv in invocations if skill_lower in inv.skill.lower()]
-
-    def filter_by_session(
-        self, session_id: str, invocations: Optional[list[SkillInvocation]] = None
-    ) -> list[SkillInvocation]:
-        """Filter invocations by session ID (prefix match)."""
-        if invocations is None:
-            invocations = self.read_all()
-        return [inv for inv in invocations if inv.session.startswith(session_id)]
-
-    def tail(self, n: int = 10) -> list[SkillInvocation]:
-        """Return the last N invocations."""
-        all_invocations = self.read_all()
-        return all_invocations[-n:] if len(all_invocations) >= n else all_invocations
-
-    def iter_from_position(self, position: int = 0) -> Iterator[tuple[int, SkillInvocation]]:
-        """Iterate over invocations starting from a byte position.
-
-        Yields tuples of (new_position, invocation).
-        Useful for watching file changes.
-        """
-        if not self.file_path.exists():
-            return
-
-        with open(self.file_path, "r", encoding="utf-8") as f:
-            f.seek(position)
-            while True:
-                line = f.readline()
-                if not line:
-                    break
-                invocation = self._parse_line(line)
-                if invocation:
-                    yield f.tell(), invocation
-
-    def get_file_size(self) -> int:
-        """Get the current file size in bytes."""
-        if not self.file_path.exists():
-            return 0
-        return self.file_path.stat().st_size
 
 
 class SessionReader:
@@ -330,3 +197,192 @@ class SessionReader:
                 if child.session_id.startswith(session_id):
                     return session
         return None
+
+
+class SessionToolScanner:
+    """Scans session JSONL files for Skill and Task tool invocations.
+
+    Parses assistant messages from session transcripts to find tool_use blocks
+    for Skill (skill invocations) and Task (agent spawning) tools.
+    Supports incremental scanning via byte position tracking per file.
+    """
+
+    def __init__(self, projects_dir: Optional[Path] = None):
+        self.projects_dir = projects_dir or DEFAULT_PROJECTS_DIR
+        self._file_positions: dict[str, int] = {}
+
+    def _parse_entry(
+        self,
+        entry: dict,
+        session_id: str,
+        is_sidechain: bool = False,
+        agent_id: Optional[str] = None,
+    ) -> list[SkillInvocation | AgentInvocation]:
+        """Parse a single JSONL entry for Skill and Task tool invocations."""
+        results: list[SkillInvocation | AgentInvocation] = []
+
+        if entry.get("type") != "assistant":
+            return results
+
+        message = entry.get("message", {})
+        content = message.get("content", [])
+
+        # Extract timestamp from the entry
+        timestamp_str = entry.get("timestamp")
+        if not timestamp_str:
+            return results
+
+        try:
+            timestamp = parse_datetime(timestamp_str)
+        except (ValueError, TypeError):
+            return results
+
+        # Extract cwd from entry metadata or default
+        cwd = entry.get("cwd", "")
+
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+
+            tool_name = block.get("name", "")
+            tool_input = block.get("input", {})
+
+            if tool_name == "Skill":
+                skill_name = tool_input.get("skill", "")
+                if not skill_name:
+                    continue
+                results.append(
+                    SkillInvocation(
+                        timestamp=timestamp,
+                        session=session_id,
+                        skill=skill_name,
+                        args=tool_input.get("args"),
+                        cwd=cwd,
+                        is_sidechain=is_sidechain,
+                        agent_id=agent_id,
+                    )
+                )
+            elif tool_name == "Task":
+                subagent_type = tool_input.get("subagent_type", "")
+                if not subagent_type:
+                    continue
+                prompt = tool_input.get("prompt", "")
+                results.append(
+                    AgentInvocation(
+                        timestamp=timestamp,
+                        session=session_id,
+                        subagent_type=subagent_type,
+                        description=tool_input.get("description"),
+                        prompt=prompt[:100] if prompt else None,
+                        cwd=cwd,
+                        is_sidechain=is_sidechain,
+                        agent_id=agent_id,
+                    )
+                )
+
+        return results
+
+    def scan_file(
+        self,
+        file_path: Path,
+        session_id: str,
+        is_sidechain: bool = False,
+        agent_id: Optional[str] = None,
+        from_position: int = 0,
+    ) -> tuple[list[SkillInvocation | AgentInvocation], int]:
+        """Scan a session JSONL file for tool invocations.
+
+        Returns (invocations, new_byte_position).
+        """
+        results: list[SkillInvocation | AgentInvocation] = []
+
+        if not file_path.exists():
+            return results, from_position
+
+        try:
+            file_size = file_path.stat().st_size
+        except OSError:
+            return results, from_position
+
+        # Handle file truncation (file was rewritten/smaller than last position)
+        if file_size < from_position:
+            from_position = 0
+
+        if file_size == from_position:
+            return results, from_position
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                f.seek(from_position)
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    invocations = self._parse_entry(
+                        entry, session_id, is_sidechain, agent_id
+                    )
+                    results.extend(invocations)
+                new_position = f.tell()
+        except OSError:
+            return results, from_position
+
+        return results, new_position
+
+    def scan_all(
+        self, incremental: bool = True
+    ) -> list[SkillInvocation | AgentInvocation]:
+        """Scan all session JSONL files for tool invocations.
+
+        Args:
+            incremental: If True, only scan new content since last scan.
+                If False, reset positions and scan from the beginning.
+        """
+        if not incremental:
+            self._file_positions.clear()
+
+        if not self.projects_dir.exists():
+            return []
+
+        results: list[SkillInvocation | AgentInvocation] = []
+
+        for project_dir in self.projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+
+            # Scan parent session files: projects/<project>/*.jsonl
+            for jsonl_file in project_dir.glob("*.jsonl"):
+                session_id = jsonl_file.stem
+                file_key = str(jsonl_file)
+                from_pos = self._file_positions.get(file_key, 0)
+
+                invocations, new_pos = self.scan_file(
+                    jsonl_file, session_id, is_sidechain=False, from_position=from_pos
+                )
+                self._file_positions[file_key] = new_pos
+                results.extend(invocations)
+
+            # Scan subagent session files:
+            # projects/<project>/<session-id>/subagents/agent-*.jsonl
+            for agent_file in project_dir.glob("*/subagents/agent-*.jsonl"):
+                agent_id = agent_file.stem.removeprefix("agent-")
+                # Parent session id from the directory name
+                parent_session_id = agent_file.parent.parent.name
+                file_key = str(agent_file)
+                from_pos = self._file_positions.get(file_key, 0)
+
+                invocations, new_pos = self.scan_file(
+                    agent_file,
+                    parent_session_id,
+                    is_sidechain=True,
+                    agent_id=agent_id,
+                    from_position=from_pos,
+                )
+                self._file_positions[file_key] = new_pos
+                results.extend(invocations)
+
+        results.sort(key=lambda inv: inv.timestamp)
+        return results

@@ -74,13 +74,50 @@ class Session(BaseModel):
 
 
 class SkillInvocation(BaseModel):
-    """Represents a single skill invocation from the tracking log."""
+    """Represents a single skill invocation from a session transcript."""
 
     timestamp: datetime
     session: str
     skill: str
     args: Optional[str] = None
     cwd: str
+    is_sidechain: bool = False
+    agent_id: Optional[str] = None
+
+    @property
+    def short_session(self) -> str:
+        """Return shortened session ID (first 8 chars)."""
+        return self.session[:8] if len(self.session) > 8 else self.session
+
+    @property
+    def local_timestamp(self) -> datetime:
+        """Return timestamp converted to local timezone."""
+        if self.timestamp.tzinfo is not None:
+            return self.timestamp.astimezone()
+        return self.timestamp
+
+    @property
+    def formatted_time(self) -> str:
+        """Return time formatted as HH:MM:SS in local timezone."""
+        return self.local_timestamp.strftime("%H:%M:%S")
+
+    @property
+    def formatted_datetime(self) -> str:
+        """Return datetime formatted as YYYY-MM-DD HH:MM in local timezone."""
+        return self.local_timestamp.strftime("%Y-%m-%d %H:%M")
+
+
+class AgentInvocation(BaseModel):
+    """Represents a subagent spawning event from Task tool usage."""
+
+    timestamp: datetime
+    session: str
+    subagent_type: str
+    description: Optional[str] = None
+    prompt: Optional[str] = None
+    cwd: str
+    is_sidechain: bool = False
+    agent_id: Optional[str] = None
 
     @property
     def short_session(self) -> str:
@@ -106,15 +143,22 @@ class SkillInvocation(BaseModel):
 
 
 class SkillStats(BaseModel):
-    """Aggregated statistics for skill usage."""
+    """Aggregated statistics for skill and agent usage."""
 
     total_invocations: int = 0
     unique_skills: int = 0
     unique_sessions: int = 0
     skill_counts: dict[str, int] = Field(default_factory=dict)
     session_counts: dict[str, int] = Field(default_factory=dict)
+    total_agent_invocations: int = 0
+    agent_counts: dict[str, int] = Field(default_factory=dict)
 
     @property
     def top_skills(self) -> list[tuple[str, int]]:
         """Return skills sorted by count descending."""
         return sorted(self.skill_counts.items(), key=lambda x: x[1], reverse=True)
+
+    @property
+    def top_agents(self) -> list[tuple[str, int]]:
+        """Return agents sorted by count descending."""
+        return sorted(self.agent_counts.items(), key=lambda x: x[1], reverse=True)

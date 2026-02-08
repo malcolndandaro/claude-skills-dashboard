@@ -8,7 +8,7 @@ from ..models import SkillStats
 
 
 class StatsPanel(Static):
-    """Panel displaying aggregated skill usage statistics."""
+    """Panel displaying aggregated skill and agent usage statistics."""
 
     DEFAULT_CSS = """
     StatsPanel {
@@ -55,12 +55,17 @@ class StatsPanel(Static):
         yield Static("", classes="stats-section")
         yield Static("Top Skills:", classes="stats-label")
         yield Static(self._format_top_skills(), id="stats-top-skills")
+        yield Static("", classes="stats-section")
+        yield Static("Top Agents:", classes="stats-label", id="stats-agents-label")
+        yield Static(self._format_top_agents(), id="stats-top-agents")
 
     def _format_summary(self) -> str:
         """Format the summary statistics."""
+        total = self._stats.total_invocations + self._stats.total_agent_invocations
         return (
-            f"Total: [bold]{self._stats.total_invocations}[/]\n"
-            f"Skills: [bold]{self._stats.unique_skills}[/]\n"
+            f"Skills: [bold]{self._stats.total_invocations}[/]  "
+            f"Agents: [bold]{self._stats.total_agent_invocations}[/]  "
+            f"Total: [bold]{total}[/]\n"
             f"Sessions: [bold]{self._stats.unique_sessions}[/]"
         )
 
@@ -74,6 +79,16 @@ class StatsPanel(Static):
             lines.append(f"[green]{skill}[/] [dim]({count})[/]")
         return "\n".join(lines)
 
+    def _format_top_agents(self, max_agents: int = 8) -> str:
+        """Format the top agents list."""
+        if not self._stats.agent_counts:
+            return "[dim]No data[/]"
+
+        lines = []
+        for agent, count in self._stats.top_agents[:max_agents]:
+            lines.append(f"[magenta]{agent}[/] [dim]({count})[/]")
+        return "\n".join(lines)
+
     def update_stats(self, stats: SkillStats) -> None:
         """Update the displayed statistics."""
         self._stats = stats
@@ -81,3 +96,5 @@ class StatsPanel(Static):
         summary.update(self._format_summary())
         top_skills = self.query_one("#stats-top-skills", Static)
         top_skills.update(self._format_top_skills())
+        top_agents = self.query_one("#stats-top-agents", Static)
+        top_agents.update(self._format_top_agents())
